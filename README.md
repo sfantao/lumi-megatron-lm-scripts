@@ -4,6 +4,8 @@ A repository for sharing documents, questions, milestones, plans, etc. that do n
 
 Megatron-LuMi: https://github.com/kb-labb/Megatron-LuMi
 
+Some tests done by AMD documented [here](./from-amd).
+
 ## Goals
 
 - get Megatron-LM running on

@@ -20,7 +20,7 @@ Megatron-LuMi: https://github.com/kb-labb/Megatron-LuMi
 
 - deduplicated
 - cleaned with language identification using `fasttext`
-  - >95% for Swedish
+  - \>95% for Swedish
 - one document per line
 - only allow text with "Swedish" characters (i.e. do not allow Cyrillic, Chinese, ...)
 

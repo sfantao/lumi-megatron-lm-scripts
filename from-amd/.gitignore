@@ -1,0 +1,14 @@
+/miniconda3/
+
+/*/*.log
+/*/*.tar
+/*/*.xz
+/*/tmp.yml
+/*/apex/
+/*/data/
+/*/deps/
+/*/megatron/
+/*/pytorch/
+/*/vision/
+/*/wikiextractor/
+/*/magma*

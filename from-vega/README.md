@@ -57,3 +57,78 @@ python tools/preprocess_data.py \
     --append-eod \
     --workers 8
 ```
+
+## Megatron Pretraining with Singularity (BertWordPieceCase)
+
+In order to pretrain with Megatron-LM we first need to:
+
+1. Clone [Megatron-LuMi-private](https://github.com/kb-labb/Megatron-LuMi-private)
+2. Download our small test dataset consisting of deduplicated Swedish Wikipedia: [wiki.sv.docs.filtered.lang.new.strict_095.dduped.json](https://kungliga-biblioteket.box.com/s/t2md4ryt4tejy6xexvyv13hyxabxk5ap). Click "Hämta" to download. 
+3. Download vocabulary file [robin-vocab.txt](https://kungliga-biblioteket.box.com/s/2y0hmsnbuu4tknkt0tfazv5dkzkq95k6). Click "Hämta" to download. 
+4. Build a singularity container from the definition file `megatron_new.def` in this repo folder. This will convert Nvidias NGC Pytorch container `nvcr.io/nvidia/pytorch:21.08-py3` to a Singularity container and install some additional packages (transformers, nltk, tokenizers, datasets). If you have sudo rightns on your system, you can build via `sudo singularity build megatron_new.sif megatron_new.def`. The resulting image will be named `megatron_new.sif`. If you do **not** have sudo privileges, you can ask an admin on HPC center for [fakeroot](https://docs.sylabs.io/guides/3.5/user-guide/fakeroot.html) privileges and build via the command `singularity build --fakeroot megatron_new.sif megatron_new.def`.
+5. Preprocess our data file `wiki.sv.docs.filtered.lang.new.strict_095.dduped.json`. 
+
+To preprocess the data file we use the preprocessing script `tools/preprocess_data.py`. An example bash script to launch the preprocessing script is provided in `preprocess_wordpiece.sh`. User needs to set correct path to the data file as `--input`, the vocab file path to `robin-vocab.txt` as `--vocab`. 
+
+```bash
+python tools/preprocess_data.py \
+    --input ~/group/data/text/public/wiki.sv.docs.filtered.lang.new.strict_095.dduped.json \
+    --output-prefix my-wordpiece \
+    --vocab data/robin-vocab.txt \
+    --dataset-impl mmap \
+    --tokenizer-type BertWordPieceCase \
+    --split-sentences \
+    --workers 8
+```
+
+After the data preprocessing you should see two files named `my-wordpiece_text_sentence.idx` and `my-wordpiece_text_sentence.bin`. 
+
+### Launch pretraining with Slurm
+
+We should now be able to launch distributed training runs. Example launch scripts can be found in this repo under `/from-vega/distributed`.
+
+On Vega we launch the job with
+
+```bash
+sbatch sbatch_run.sh
+```
+
+Adjust the following variables in `sbatch_run.sh` to point to your relevant working directory and the singularity container.
+
+```
+PROJECT=/ceph/hpc/home/eufatonr/group/faton/Megatron-LuMi
+TARGET_DIR="/ceph/hpc/home/eufatonr/group/faton/Megatron-LuMi"
+CONTAINER_PATH="/ceph/hpc/home/eufatonr/group/faton/Megatron-LuMi/megatron_new.sif"
+LOGGING=$PROJECT/logs
+```
+
+Make sure a `logs` folder exists in the project directory before running. `mkdir logs`.
+
+`sbatch_run.sh` will call the bash script `start_training.sh` which runs the script to launch distributed training. In `start_training.sh` the user should adjust paths to the vocab file and the prefix of the preprocessed data files. The case below assumes `sbatch_run.sh` was launched from the root of the project directory and that `my-wordpiece_text_sentence.idx` and `my-wordpiece_text_sentence.bin` are placed on the root level, as well as `robin-vocab.txt` being placed in a the `data/` folder under in the project directory. 
+
+```
+CHECKPOINT_PATH=checkpoints/bert_tiny
+DATA_PATH=my-wordpiece_text_sentence
+VOCAB_FILE=data/robin-vocab.txt
+```
+
+### TODO: Launch pretraining with Conda
+
+Assuming we have a conda environment with Pytorch built with all necessary dependencies we should be able to launch a distributed training run in a similar manner as the Singularity contianer example above.
+
+This is still work in progress. 
+
+In `sbatch_run.sh` change
+
+```
+cmd="srun -l --output=$LOGGING/srun_$DATETIME.log \
+      singularity exec --nv --pwd /ceph/hpc/home/eufatonr/group/faton/Megatron-LuMi --bind $PROJECT:$TARGET_DIR $CONTAINER_PATH \
+      $TARGET_DIR/scripts/start_training.sh"
+```
+
+to 
+
+```
+cmd="srun -l --output=$LOGGING/srun_$DATETIME.log \
+      $TARGET_DIR/scripts/start_training.sh"
+```

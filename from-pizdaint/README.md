@@ -1,5 +1,5 @@
 # Piz Daint
-This are the instructions to run the prtraining on [Piz Daint](https://www.cscs.ch/computers/piz-daint/). This is a Cray machine with one NVidia GPU per node.
+This are the instructions to run the pretraining on [Piz Daint](https://www.cscs.ch/computers/piz-daint/). This is a Cray machine with one NVidia GPU per node.
 
 Here we run the pretraining using singularity. We use the image [nvcr.io/nvidia/pytorch:21.07-py3](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch) from Nvidia GPU Cloud. For more info, see the [release notes](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/rel_21-07.html#rel_21.07).
 
@@ -192,3 +192,61 @@ srun singularity exec --nv \
           export PYTHONPATH=$HOME/kblabb/Megatron-LuMi-private:$PYTHONPATH;
           bash $HOME/kblabb/LUMI-porting-Megatron-LM/from-vega/distributed/start_training.sh'
 ```
+
+## Running native
+The setup to run the pretraining native is pretty much the same. The only non-conventional thing is the installation of Nvidia's `apex`. After installing PyTorch (I installed pytorch-1.12.0 on venv):
+```
+. $SANDBOX/hpcpython2022/bin/activate
+module load daint-gpu
+module load cudatoolkit/21.5_11.3      # cuda-11.3 to match pytorch binaries
+module switch PrgEnv-cray PrgEnv-gnu
+module switch gcc gcc/9.3.0
+
+git clone git@github.com:NVIDIA/apex.git
+
+export TORCH_CUDA_ARCH_LIST=6.0
+CXX=CC CC=cc pip install -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./apex
+```
+The posprocessing is
+```bash
+cd data
+. $SANDBOX/hpcpython2022/bin/activate
+python $HOME/kblabb/Megatron-LuMi-private/tools/preprocess_data.py \
+       --input wiki.sv.docs.filtered.lang.new.strict_095.dduped.json \
+       --output-prefix my-wordpiece \
+       --tokenizer-type BertWordPieceCase \
+       --vocab robin-vocab.txt \
+       --dataset-impl mmap \
+       --split-sentences \
+       --workers 8
+```
+A Slurm batch script could be
+```bash
+#!/bin/bash -l
+
+#SBATCH --job-name=pretrain-bert
+#SBATCH --time=00:20:00
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-core=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=12
+#SBATCH --constraint=gpu
+#SBATCH --account=<account>
+
+export NPROC_PER_NODE=1
+export MASTER_ADDR=$(scontrol show hostname $SLURM_NODELIST | head -n1)
+export MASTER_PORT=14568
+
+. $SANDBOX/hpcpython2022/bin/activate
+module load daint-gpu
+module load cudatoolkit/21.5_11.3                   # cuda-11.3 to match pytorch binaries
+module switch PrgEnv-cray PrgEnv-gnu
+module switch gcc gcc/9.3.0
+export TORCH_CUDA_ARCH_LIST=6.0
+export PYTHONPATH=$HOME/kblabb/native/Megatron-LuMi-private:$PYTHONPATH;
+
+export CC=cc
+export CXX=CC
+srun bash $HOME/kblabb/native/LUMI-porting-Megatron-LM/from-vega/distributed/start_training.sh
+```
+I didn't see any difference in performancecompared to running with singularity. With the same training options as above (micro batch size 16 and global batch size 32), the elapsed time per iteration is ~ 2189.0 ms with one node and ~1186.3 ms for two nodes.

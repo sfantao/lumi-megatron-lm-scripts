@@ -209,10 +209,6 @@ prepare_data () {
 # Run training
 #
 run_training() {
-  # python -c "from torch.utils import cpp_extension ; print(cpp_extension.ROCM_HOME)"
-  # 
-  # return
-
   export CPATH=/share/modules/hpc_sdk/21.3/Linux_x86_64/21.3/cuda/11.2/targets/x86_64-linux/include:$CPATH
   export LIBRARY_PATH=/share/modules/hpc_sdk/21.3/Linux_x86_64/21.3/cuda/11.2/targets/x86_64-linux/lib:$LIBRARY_PATH
   export CC=gcc
@@ -222,13 +218,9 @@ run_training() {
   cd $wd/megatron
   #rm -rf megatron/fused_kernels/build
 
-  #CPATH=/share/modules/hpc_sdk/21.3/Linux_x86_64/21.3/cuda/11.2/targets/x86_64-linux/include:$CPATH
-  #LIBRARY_PATH=/share/modules/hpc_sdk/21.3/Linux_x86_64/21.3/cuda/11.2/targets/x86_64-linux/lib:$LIBRARY_PATH
-  #LD_LIBRARY_PATH=/share/modules/hpc_sdk/21.3/Linux_x86_64/21.3/cuda/11.2/targets/x86_64-linux/lib:$LD_LIBRARY_PATH
-  export MASTER_ADDR=localhost
+  export MASTER_ADDR=$(hostname)
   export MASTER_PORT=12345
-  #CC=gcc
-  #CXX=g++
+  export OMP_NUM_THREADS=1
   
   TRAIN_DATA="/tmp/$(whoami)/megatron-data/RACE/train/middle"
   VALID_DATA="/tmp/$(whoami)/megatron-data/RACE/dev/middle \
@@ -260,9 +252,7 @@ run_training() {
                         --eval-iters 10 \
                         --weight-decay 1.0e-1"
 
-  # Binding has to be adjusted as needed.
-  numactl --physcpubind=16-31,144-159  --membind=1 \
-  python tasks/main.py \
+  MYCMD="python tasks/main.py
          --task RACE \
          $COMMON_TASK_ARGS \
          $COMMON_TASK_ARGS_EXT \
@@ -270,7 +260,69 @@ run_training() {
          --epochs 3 \
          --micro-batch-size 4 \
          --lr 1.0e-5 \
-         --lr-warmup-fraction 0.06 |& tee  $wd/evaluate-bert-race.log
+         --lr-warmup-fraction 0.06"
+         
+  # Binding has to be adjusted as needed.
+   
+  (pkill python && sleep 3) || true
+   
+  if [ -z "$DISTRIBUTED_RUN" ] ; then
+    rm -rf $wd/evaluate-bert-race.log
+    
+#     numactl --physcpubind=16-31,144-159  --membind=0 \
+#     /usr/local/bin/nsys profile \
+#       -o $wd/nsys.out \
+#       --stats=true \
+#       --sample=none \
+#       --trace=cuda,nvtx,mpi \
+#       --capture-range=none \
+#     $MYCMD --exit-interval 100 |& tee  $wd/evaluate-bert-race.log
+  
+    numactl --physcpubind=16-31,144-159  --membind=0 \
+    ncu \
+      --target-processes all \
+      --set full \
+      --import-source yes \
+      --kernel-regex-base function \
+      --kernel-id ::regex::100 \
+      -f --export all-kernels \
+      $MYCMD --exit-interval 100 |& tee  $wd/evaluate-bert-race.log
+
+#            --kernel-regex-base function \
+#       --kernel-id ::regex:kCalcPMEOrthoNBFrc16_kernel:5000 -f \
+#       --export kCalcPMEOrthoNBFrc16_kernel \
+  else
+     export WORLD_SIZE=2
+     export TENSOR_MP_SIZE=2
+     export PIPELINE_MP_SIZE=2
+     MYCMD="$MYCMD \
+            --tensor-model-parallel-size $TENSOR_MP_SIZE \
+            --pipeline-model-parallel-size $PIPELINE_MP_SIZE \
+            --sequence-parallel \
+            --DDP-impl torch"
+
+    rm -rf $wd/evaluate-bert-race-dist*
+  
+    pids=''
+  
+    RANK=0 \
+    LOCAL_RANK=0 \
+    numactl --physcpubind=16-31,144-159  --membind=0 \
+    $MYCMD --local_rank 0 |& tee  $wd/evaluate-bert-race-dist-0.log &
+    pids="$pids $!"
+  
+    RANK=1 \
+    LOCAL_RANK=1 \
+    numactl --physcpubind=0-15,128-143  --membind=1 \
+    $MYCMD --local_rank 1 |& tee  $wd/evaluate-bert-race-dist-1.log &
+    pids="$pids $!"
+  
+    for p in $pids ; do
+      echo "Waiting for $p..."
+      wait $p
+      echo "Done!"
+    done
+  fi
 }
 
 #

@@ -1,0 +1,24 @@
+bootstrap: docker
+from: nvcr.io/nvidia/pytorch:21.08-py3
+
+%environment
+export LC_ALL=C
+
+%post
+# create mount points for SLING
+mkdir /data1 /data2 /data0
+mkdir -p /var/spool/slurm
+mkdir -p /d/hpc
+mkdir -p /ceph/grid
+mkdir -p /ceph/hpc
+mkdir -p /scratch
+mkdir -p /exa5/scratch
+
+pip3 list freeze
+env | grep -i arch
+
+# pip3 install apex
+pip3 install nltk
+pip3 install transformers
+pip3 install tokenizers
+pip3 install datasets

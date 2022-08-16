@@ -3,6 +3,14 @@
 islockhart=false
 if [ "$(uname -r)" = "5.3.18-150300.59.68_11.0.76-cray_shasta_c" ] ; then
   islockhart=true
+  echo "Building for Lockhart"
+fi
+
+islumi=false
+if [[ "$(hostname)" == "nid"* ]] || [[ "$(hostname)" == "uan"* ]] ; then
+  islumi=true
+  islockhart=false
+  echo "Building for LUMI"
 fi
 
 if $islockhart ; then
@@ -18,7 +26,6 @@ else
 fi
 
 wd=$base
-
 
 #
 # Modules to provide ROCm and recent GCC if needed
@@ -87,12 +94,81 @@ export LD_LIBRARY_PATH="$rl/lib:$base/aws-ofi-rccl/src/.libs/:/opt/cray/libfabri
 
 EOF
 
-export FI_CXI_ATS=0
-export LD_LIBRARY_PATH="/tmp/$(whoami)/rccl-plugin/rccl-install/lib:/tmp/$(whoami)/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.0.0/lib64/:/opt/rocm-$rocrel/lib:$LD_LIBRARY_PATH"
-
-
+    export FI_CXI_ATS=0
+    export LD_LIBRARY_PATH="/tmp/$(whoami)/rccl-plugin/rccl-install/lib:/tmp/$(whoami)/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.0.0/lib64/:/opt/rocm-$rocrel/lib:$LD_LIBRARY_PATH"
     source $wd/mymodules/myrocm/default.sh
     echo $ROCM_PATH
+  elif $islumi ; then
+    #export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/appl/lumi/SW/LUMI-21.12/common/EB/rocm/4.5.2/lib
+    rl=$wd/rccl-install
+    mkdir -p $wd/mymodules/myrocm
+    cat > $wd/mymodules/myrocm/default.sh << EOF
+#!/bin/bash -e
+
+export PATH=$wd/valgrind/bin:$PATH
+
+ml LUMI/22.06
+ml partition/G
+ml PrgEnv-gnu/8.3.3
+# ml rocm/5.1.4
+
+module unload cray-libsci
+
+base="/appl/lumi/SW/LUMI-22.06/common/EB/rocm/5.1.4"
+base="/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles"
+
+subdirs=""
+subdirs="\$subdirs hipblas hipcub hiprand hipsparse hsa miopen"
+subdirs="\$subdirs oam opencl rocalution rocblas rocfft rocprim"
+subdirs="\$subdirs rocrand rocsolver rocsparse rocthrust"
+
+libdirs=""
+libdirs="\$libdirs llvm lib64 lib llvm/lib hsa/lib hip/lib"
+
+
+bindirs=""
+bindirs="\$bindirs bin hip/bin atmi/bin"
+bindirs="\$bindirs opencl/bin miopen/bin rocprofiler/bin llvm/bin"
+
+for sname in \$subdirs ; do
+  p="\$base/\$sname/include"
+  export CMAKE_PREFIX_PATH="\$p:\$CMAKE_PREFIX_PATH"
+  export CPATH="\$p:\$CPATH"
+  export C_INCLUDE_PATH="\$p:\$C_INCLUDE_PATH"
+  export CPLUS_INCLUDE_PATH="\$p:\$CPLUS_INCLUDE_PATH"
+done
+
+for dname in \$libdirs ; do
+  p="\$base/\$dname"
+  export LD_LIBRARY_PATH="\$p:\$LD_LIBRARY_PATH"
+  export LD_RUN_PATH="\$p:\$LD_RUN_PATH"
+  export LIBRARY_PATH="\$p:\$LIBRARY_PATH"
+done
+
+for dname in \$bindirs ; do
+  p="\$base/\$dname"
+  export PATH="\$p:\$PATH"
+done 
+
+export PKG_CONFIG_PATH="\$base/share/pkgconfig:\$PKG_CONFIG_PATH"
+export MANPATH="\$base/share/man:\$MANPATH"
+export ROCM_PATH="\$base"
+export ROCM_SOURCE_DIR="\$base"
+export RCCL_PATH="$rl"
+export HIP_PATH="\$base/hip"
+export HIPDIR="\$base/hip"
+
+export CMAKE_PREFIX_PATH="$rl/lib:\$CMAKE_PREFIX_PATH"
+export MAGMA_HOME=$wd/magma-install
+
+export LIBRARY_PATH="$wd/deps/usr/lib64:$wd/deps/usr/lib64/ncurses5:\$LIBRARY_PATH"
+export LD_LIBRARY_PATH="$wd/deps/usr/lib64:$wd/deps/usr/lib64/ncurses5:\$LD_LIBRARY_PATH"
+
+export FI_CXI_ATS=0
+export LD_LIBRARY_PATH="$rl/lib:$wd/aws-ofi-rccl/src/.libs/:/opt/cray/libfabric/1.15.0.0/lib64/:\$LD_LIBRARY_PATH"
+
+EOF
+    source $wd/mymodules/myrocm/default.sh
   else
     ml rocm/5.2.0-rel52 gcc/9.3.0 numactl
     #rl=/home/sfantao/lumi-builds/mlperf/rccl-plugin/rccl-install
@@ -128,10 +204,28 @@ checkout_rccl () {
   git clone https://github.com/ROCmSoftwarePlatform/rccl-tests $wd/rccl-tests
 }
 checkout_libncurses () {
-  if $islockart ; then
+  if $islockhart ; then
     return
   fi
   
+  if $islumi ; then
+    rm -rf $wd/deps
+    mkdir $wd/deps
+    cd $wd/deps
+  
+   #       ncurses5-devel-6.1-5.6.2.x86_64.rpm \
+   #   libncurses5-6.1-5.6.2.x86_64.rpm \
+   # 
+    for i in \
+      libncurses6-6.1-5.6.2.x86_64.rpm \
+      ncurses-devel-6.1-5.6.2.x86_64.rpm \
+    ; do
+      curl -LO https://download.opensuse.org/distribution/leap/15.3/repo/oss/x86_64/$i
+      rpm2cpio $i | cpio -idmv 
+    done
+    return
+  fi
+
   rm -rf $wd/deps
   mkdir $wd/deps
   cd $wd/deps
@@ -147,7 +241,7 @@ checkout_libncurses () {
 checkout_magma () {
   cd $wd
   rm -rf magma magma-install
-  if $islockart ; then
+  if $islockhart ; then
     tar -xf ~/rccl-repro/magma.tar.xz
     return
   fi
@@ -166,6 +260,24 @@ checkout_pytorch () {
   git checkout -b mydev 5d5e1e214555d824f29eebcd5eb72682359829d5
   git submodule sync
   git submodule update --init --recursive --jobs 0
+  
+  cd third_party/ideep/mkl-dnn
+  cat > mkl-dnn.patch << EOF
+diff --git a/src/common/primitive_cache.cpp b/src/common/primitive_cache.cpp
+index fb0cc7895..f5ee71420 100644
+--- a/src/common/primitive_cache.cpp
++++ b/src/common/primitive_cache.cpp
+@@ -152,7 +152,7 @@ void lru_primitive_cache_t::update_entry(
+     //    by another thread
+     // 2. After the requested entry had been evicted it was inserted again
+     //    by another thread
+-    if (it == cache_mapper_.end() || it->first.thread_id() != key.thread_id())
++    if (it == cache_mapper_.end() || !(it->first.thread_id() == key.thread_id()))
+         return;
+ 
+     const auto *op_desc = pd->op_desc();
+EOF
+  git apply < mkl-dnn.patch
 }
 checkout_vision () {
   cd $wd
@@ -266,10 +378,11 @@ conda_megatron_build () {
 #
 build_rccl () {
 
-
   cd $wd/rccl
+  rm -rf build
   mkdir build
   cd build/
+  rm -rf $wd/rccl-install 
   CXX=$ROCM_PATH/bin/hipcc cmake \
     -DCMAKE_INSTALL_PREFIX=$wd/rccl-install \
     -DAMDGPU_TARGETS="gfx90a:xnack-;gfx90a:xnack+" \
@@ -286,9 +399,10 @@ build_rccl () {
     MPI=1 \
     NCCL_HOME=$wd/rccl-install \
     nice make -j
-    
+
   cd $wd/aws-ofi-rccl
-  ./autogen.sh 
+  ./autogen.sh
+  echo "LD_LIBRARY_PATH->$LD_LIBRARY_PATH"
   CC=cc ./configure --with-libfabric=/opt/cray/libfabric/1.15.0.0 --enable-trace --with-hip=$ROCM_PATH --with-rccl=$wd/rccl-install
   nice make -j
 }
@@ -318,24 +432,28 @@ build_magma () {
 
 build_pytorch () {
   cd $wd/pytorch
-  
-  sed -i 's#/opt/rocm/#/opt/rocm-5.2.0/#g' third_party/kineto/libkineto/CMakeLists.txt
+  export PATH=~/tools/bin:$PATH
+
+  sed -i "s#/opt/rocm/#$ROCM_PATH/#g" third_party/kineto/libkineto/CMakeLists.txt
+  sed -i "s#/opt/rocm/#$ROCM_PATH/#g" cmake/Dependencies.cmake
   
   nice python3 setup.py clean
   
   nice python3 tools/amd_build/build_amd.py |& tee $(whoami)_amd_tunning.log
-
+  CC=$(which cc) \
+  CXX=$(which CC) \
   CPATH=$CPATH:$ROCM_PATH/roctracer/include \
   CMAKE_PREFIX_PATH=$conda_location/envs/megatron-rocm-pytorch-build:$CMAKE_PREFIX_PATH \
   CMAKE_MODULE_PATH=$CMAKE_MODULE_PATH:$wd/pytorch/cmake/Modules_CUDA_fix \
   LDFLAGS='-ltinfo' \
-  PYTORCH_ROCM_ARCH='gfx908;gfx90a' \
+  PYTORCH_ROCM_ARCH='gfx90a' \
   RCCL_PATH=$rl \
   RCCL_DIR=$rl/lib/cmake/rccl \
   hip_DIR=${ROCM_PATH}/hip/cmake/ \
   VERBOSE=1 \
   V=1 \
   REL_WITH_DEB_INFO=1 \
+  USE_MKLDNN=1 \
   nice python3 setup.py bdist_wheel |& tee $(whoami)_install.log
 }
 
@@ -348,12 +466,17 @@ build_apex () {
   cd $wd/apex
   if $islockart ; then
     sed -i "s#/opt/rocm/#/opt/rocm-5.0.2/#g" setup.py
+  elif $islumi ; then
+    sed -i "s#/opt/rocm/#$ROCM_PATH/#g" setup.py
   else
     sed -i "s#/opt/rocm/#/opt/rocm-5.2.0/#g" setup.py
   fi
   if $islockhart; then
     LD_LIBRARY_PATH=$conda_location/envs/megatron-rocm-megatron-build/lib:$LD_LIBRARY_PATH \
       nice python setup.py bdist_wheel --cpp_ext --cuda_ext |& tee $(whoami)_install.log
+  elif $islumi; then
+    LD_LIBRARY_PATH=$conda_location/envs/megatron-rocm-megatron-build/lib:$LD_LIBRARY_PATH \
+    nice python setup.py bdist_wheel --cpp_ext --cuda_ext |& tee $(whoami)_install.log
   else
     nice python setup.py bdist_wheel --cpp_ext --cuda_ext |& tee $(whoami)_install.log
   fi
@@ -386,6 +509,9 @@ download_kb_data () {
   if $islockhart ; then
     cp /home/sfantao/lumi-builds/megatron/megatron-kb-lab-notes/kb-data/wiki.sv.docs.filtered.lang.new.strict_095.dduped.json .
     cp /home/sfantao/lumi-builds/megatron/megatron-kb-lab-notes/kb-data/robin-vocab.txt .
+  elif $islumi ; then
+    cp /pfs/lustrep4/projappl/project_462000075/samantao/ongoing/megatron/kb-data/wiki.sv.docs.filtered.lang.new.strict_095.dduped.json .
+    cp /pfs/lustrep4/projappl/project_462000075/samantao/ongoing/megatron/kb-data/robin-vocab.txt .
   else
     echo "Download KB data."
     exit 1
@@ -394,14 +520,14 @@ download_kb_data () {
 
 
 prepare_data () {
-  if [ -d /tmp/$(whoami)/megatron-data/megatron_bert_345m_v0.1_uncased ] ; then
+  if [ -d  $wd/megatron-data/megatron_bert_345m_v0.1_uncased ] ; then
     return
   fi
   
-  mkdir -p /tmp/$(whoami)/megatron-data/megatron_bert_345m_v0.1_uncased
-  cd /tmp/$(whoami)/megatron-data
+  mkdir -p  $wd/megatron-data/megatron_bert_345m_v0.1_uncased
+  cd  $wd/megatron-data
   tar -xf $wd/data/RACE.tar.gz 
-  cd /tmp/$(whoami)/megatron-data/megatron_bert_345m_v0.1_uncased
+  cd  $wd/megatron-data/megatron_bert_345m_v0.1_uncased
   unzip $wd/data/megatron_bert_345m_v0.1_uncased.zip
 }
 
@@ -426,26 +552,26 @@ run_training() {
   # 
   # return
   
-  MYSLURMID=$(squeue -u sfantao | tail -n 1 | awk '{print $1;}')
+  MYSLURMID=$(squeue -u $(whoami) | tail -n 1 | awk '{print $1;}')
   export MYSLURMID
   srun --jobid=${MYSLURMID} -N 2 hostname
   
   cd $wd/megatron
-  rm -rf megatron/fused_kernels/build/scaled_masked_softmax*
+  #rm -rf megatron/fused_kernels/build/scaled_masked_softmax*
   
   #touch megatron/fused_kernels/scaled_softmax_cuda.cu
   #touch megatron/fused_kernels/scaled_masked_softmax_cuda.cu
 
-  export MASTER_ADDR=$(hostname)
+  export MASTER_ADDR=nid005107
   export MASTER_PORT=12345
   export OMP_NUM_THREADS=1
   
-  TRAIN_DATA="/tmp/$(whoami)/megatron-data/RACE/train/middle"
-  VALID_DATA="/tmp/$(whoami)/megatron-data/RACE/dev/middle \
-              /tmp/$(whoami)/megatron-data/RACE/dev/high"
+  TRAIN_DATA="$wd/megatron-data/RACE/train/middle"
+  VALID_DATA="$wd/megatron-data/RACE/dev/middle \
+              $wd/megatron-data/RACE/dev/high"
   VOCAB_FILE=$wd/data/bert-large-uncased-vocab.txt 
-  PRETRAINED_CHECKPOINT=/tmp/$(whoami)/megatron-data/megatron_bert_345m_v0.1_uncased/release/mp_rank_00/model_optim_rng.pt
-  CHECKPOINT_PATH=/tmp/$(whoami)/megatron-data/megatron_bert_345m_v0.1_uncased/release/mp_rank_00/model_optim_rng_race.pt
+  PRETRAINED_CHECKPOINT=$wd/megatron-data/megatron_bert_345m_v0.1_uncased/release/mp_rank_00/model_optim_rng.pt
+  CHECKPOINT_PATH=$wd/megatron-data/megatron_bert_345m_v0.1_uncased/release/mp_rank_00/model_optim_rng_race.pt
   
   # Always start at random
   rm -rf $CHECKPOINT_PATH
@@ -484,11 +610,25 @@ run_training() {
    
   (pkill python && sleep 3) || true
    
-  if $islockahrt ; then
+  if $islockhart; then
     export LD_LIBRARY_PATH=$conda_location/envs/megatron-rocm-megatron-build/lib:$LD_LIBRARY_PATH
     
     srun --jobid=${MYSLURMID} -N 1 -n 1 --gpus=1 --cpu-bind=v,cores --cpus-per-task=16 \
       $MYCMD --exit-interval 100 |& tee  $wd/evaluate-bert-race.log
+  
+    return
+  fi 
+  
+  if $islumi; then
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$conda_location/envs/megatron-rocm-megatron-build/lib
+    
+    #MPICH_GPU_SUPPORT_ENABLED=1 \
+    #srun --jobid=${MYSLURMID} -N 2 -n 2 --gpus=16 --cpus-per-task=8 \
+    #/pfs/lustrep4/projappl/project_462000075/samantao/ongoing/HIP-Examples/gpu-burn/build/gpuburn-hip
+    
+    MPICH_GPU_SUPPORT_ENABLED=1 \
+    srun --jobid=${MYSLURMID} -N 1 -n 1 --gpus=8 --cpus-per-task=8 \
+    $MYCMD --exit-interval 100 |& tee  $wd/evaluate-bert-race.log
   
     return
   fi 
@@ -539,6 +679,7 @@ run_training() {
 run_kb_pretraining() {
   mkdir -p $wd/kb-runs
   cd $wd/kb-runs
+  rm -rf run-*.log
   
   MYSLURMID=$(squeue -u $(whoami) | tail -n 1 | awk '{print $1;}')
   CHECKPOINT_PATH=checkpoints/bert_tiny
@@ -547,15 +688,15 @@ run_kb_pretraining() {
   
   export NNODES=1
   export NPROC_PER_NODE=1
-  
-  #!/bin/bash -x
+    
+  cat > helper.sh << EOF
+#!/bin/bash -ex
 
-
-<< EOF
-export MASTER_ADDR=x1000c4s1b0n0
-export MASTER_PORT=29500
-export WORLD_SIZE=2
-export OMP_NUM_THREADS=1
+mpids=''
+if [ \$SLURM_LOCALID -eq 0 ] ; then
+  rocm-monitor &
+  mpids=\$!
+fi
 
 export NCCL_DEBUG=INFO 
 export RCCL_KERNEL_COLL_TRACE_ENABLE=1 
@@ -568,27 +709,15 @@ export NCCL_SPINS_BEFORE_CHECK_ABORT=1000
 
 export FI_LOG_LEVEL=info
 
-#pkill python
-#sleep 1
+export MASTER_ADDR=\$(scontrol show hostname "\$SLURM_NODELIST" | head -n1)
+export MASTER_ADDR=nid005015
+echo \$MASTER_ADDR
 
-unset ROCR_VISIBLE_DEVICES
-echo "ROCR_VISIBLE_DEVICES=\$ROCR_VISIBLE_DEVICES"
-cmd="/tmp/$(whoami)/miniconda3/envs/mlperf-transformer-bf16/bin/python -u train.py --distributed-world-size=\$WORLD_SIZE --local_rank=\$SLURM_LOCALID /tmp/$(whoami)/data-transformer/transformer-mlperf-data/wmt14_en_de/utf8 --seed 11082 --arch transformer_wmt_en_de_big_t2t --bf16 --share-all-embeddings --optimizer adam --adam-betas (0.9,0.997) --adam-eps 1e-9 --clip-norm 0.0 --lr-scheduler inverse_sqrt --warmup-init-lr 0.0 --warmup-updates 1000 --lr 1.976e-3 --min-lr 0.0 --dropout 0.1 --weight-decay 0.0 --criterion label_smoothed_cross_entropy --label-smoothing 0.1 --max-tokens 10240 --max-epoch 30 --target-bleu 25.0 --ignore-case --no-save --update-freq 1 --seq-len-multiple 2 --source_lang en --target_lang de --bucket_growth_factor 1.035 --batching_scheme v0p5_better --batch_multiple_strategy dynamic --max-len-a 1 --max-len-b 50 --lenpen 0.6 --no-progress-bar --dataloader-num-workers 2 --enable-dataloader-pin-memory --fast-xentropy --distributed-init-method env:// --distributed-weight-update 0 --dwu-num-blocks 4 --dwu-num-rs-pg 2 --dwu-num-ar-pg 2 --dwu-num-ag-pg 0 --dwu-overlap-reductions --dwu-num-chunks 1 --dwu-flat-mt --dwu-compute-L2-grad-norm --max-source-positions 64 --max-target-positions 64 --adam-betas (0.9,0.98)"
-#cmd="/tmp/$(whoami)/miniconda3/envs/mlperf-transformer/bin/python -u train.py --distributed-world-size=\$WORLD_SIZE --local_rank=\$SLURM_LOCALID /tmp/$(whoami)/data-transformer/transformer-mlperf-data/wmt14_en_de/utf8 --seed 3475 --arch transformer_wmt_en_de_big_t2t --share-all-embeddings --optimizer adam --adam-betas (0.9,0.997) --adam-eps 1e-9 --clip-norm 0.0 --lr-scheduler inverse_sqrt --warmup-init-lr 0.0 --warmup-updates 1000 --lr 1.976e-3 --min-lr 0.0 --dropout 0.1 --weight-decay 0.0 --criterion label_smoothed_cross_entropy --label-smoothing 0.1 --max-tokens 10240 --max-epoch 4 --target-bleu 25.0 --ignore-case --no-save --update-freq 1 --fp16 --seq-len-multiple 2 --source_lang en --target_lang de --bucket_growth_factor 1.035 --batching_scheme v0p5_better --batch_multiple_strategy dynamic --fast-xentropy --max-len-a 1 --max-len-b 50 --lenpen 0.6 --no-progress-bar --dataloader-num-workers 2 --enable-dataloader-pin-memory --multihead-attn-impl fast_with_lyrnrm_and_dropoutadd --distributed-init-method env:// --distributed-weight-update 0 --dwu-num-blocks 4 --dwu-num-rs-pg 2 --dwu-num-ar-pg 2 --dwu-num-ag-pg 0 --dwu-overlap-reductions --dwu-num-chunks 1 --dwu-flat-mt --dwu-compute-L2-grad-norm --max-source-positions 64 --max-target-positions 64 --adam-betas (0.9,0.98)"
-
-export RANK=\$SLURM_PROCID
-\$cmd |& tee ~/per-rank-\$RANK.log
-
-EOF
-  
-  
-  cat > helper.sh << EOF
-#!/bin/bash -e
-export MASTER_ADDR=\$(scontrol show hostname \$SLURM_NODELIST | head -n1)
 export MASTER_PORT=34567
 export OMP_NUM_THREADS=2
-export WORLD_SIZE=\$(($NNODES*$NPROC_PER_NODE))
+export WORLD_SIZE=\$SLURM_NTASKS
 export RANK=\$SLURM_PROCID
+export LOCAL_RANK=\$SLURM_LOCALID
 
 #--local_rank=\$SLURM_LOCALID
 unset ROCR_VISIBLE_DEVICES
@@ -608,14 +737,14 @@ BERT_ARGS="--num-layers 12 \
            --train-iters 100000 \
            --lr-warmup-iters 1000 \
            --micro-batch-size 32 \
-           --global-batch-size 2048 \
+           --global-batch-size $((32*2*1)) \
            --adam-beta2 0.999 \
            --adam-eps 1e-6 \
            --data-path $DATA_PATH \
            --vocab-file $VOCAB_FILE \
            --split 949,50,1 \
            --fp16 \
-           --tokenizer-type BertWordPieceCase"
+           --tokenizer-type BertWordPieceCase --local_rank \$LOCAL_RANK"
 
 OUTPUT_ARGS="--log-interval 100 \
              --save-interval 5000 \
@@ -628,15 +757,34 @@ cmd="python3 -m torch.distributed.launch \$DISTRIBUTED_ARGS \
        \$OUTPUT_ARGS \
        --save $CHECKPOINT_PATH \
        --load $CHECKPOINT_PATH"
+       
+cmd="python3 \
+       $wd/megatron/pretrain_bert.py \
+       \$BERT_ARGS \
+       \$OUTPUT_ARGS \
+       --save $CHECKPOINT_PATH \
+       --load $CHECKPOINT_PATH"
 
-echo "--> Rank \$SLURM_PROCID executing command: \$cmd"
+echo "--> Rank \$SLURM_PROCID (\$(taskset -p \$\$)) executing command: \$cmd"
 
 \$cmd |& tee run-\$SLURM_PROCID.log
+
+for p in \$mpids ; do
+  kill $p
+done
+
 EOF
   chmod +x helper.sh 
-  srun --jobid=$MYSLURMID -N $NNODES --gpus $((8*$NNODES)) ./helper.sh |& tee run-complete.log
+  echo $LD_LIBRARY_PATH
+  export LD_LIBRARY_PATH=/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/rccl-install/lib:/opt/cray/libfabric/1.15.0.0/lib64/:/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/deps/usr/lib64:/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/deps/usr/lib64/ncurses5:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/hip/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/hsa/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/llvm/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/lib64:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/llvm:/opt/cray/pe/gcc/11.2.0/snos/lib64:/opt/cray/libfabric/1.15.0.0/lib64:/opt/cray/pe/papi/6.0.0.15/lib64:/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/deps/usr/lib64
+  MASKS=(ff000000000000 ff00000000000000 ff0000 ff000000 ff ff00 ff00000000 ff0000000000 )
+  MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
+  NNODES=1
+  srun --jobid=$MYSLURMID -N $NNODES -n 1 \
+  --gpus=$((8*$NNODES)) \
+  --cpus-per-task=8 --cpu-bind=mask_cpu:$MASKS \
+  ./helper.sh |& tee run-complete.log
 }
-
 
 #
 # Run the various steps - uncomment all steps to build from scratch, 
@@ -645,36 +793,40 @@ EOF
 
 set_base_environment
 
-checkout_rccl
-checkout_libncurses
-checkout_magma
-checkout_pytorch
-checkout_vision
-checkout_apex
-checkout_megatron
-checkout_wikiextractor
-
-build_rccl
+# checkout_rccl
+# checkout_libncurses
+# checkout_magma
+# checkout_pytorch
+# checkout_vision
+# checkout_apex
+# checkout_megatron
+# checkout_wikiextractor
+# 
+# build_rccl
 
 conda_base
-build_magma
+# build_magma
 set_magma_environment
 
 conda_pytorch_build
-build_pytorch
+# build_pytorch
 set_pytorch_environment
 
 conda_vision_build
-build_vision
+# build_vision
 
 conda_apex_build
-build_apex
+# build_apex
 conda_megatron_build
 
-download_data
-download_kb_data
-prepare_data
-prepare_kb_data
+# download_data
+# download_kb_data
+# prepare_data
+# prepare_kb_data
+
+
+MYSLURMID=$(squeue -u $(whoami) | tail -n 1 | awk '{print $1;}')
+export MYSLURMID
 
 #(run_training)
-# (run_kb_pretraining)
+(run_kb_pretraining)

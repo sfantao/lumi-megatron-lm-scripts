@@ -679,38 +679,38 @@ run_training() {
 run_kb_pretraining() {
   mkdir -p $wd/kb-runs
   cd $wd/kb-runs
-  rm -rf run-*.log
+  rm -rf run-*.log checkpoints
   
   MYSLURMID=$(squeue -u $(whoami) | tail -n 1 | awk '{print $1;}')
   CHECKPOINT_PATH=checkpoints/bert_tiny
   DATA_PATH=$wd/data/kb/my-wordpiece_text_sentence
   VOCAB_FILE=$wd/data/kb/robin-vocab.txt
   
-  export NNODES=1
-  export NPROC_PER_NODE=1
+  export NNODES=2
+  export NPROC_PER_NODE=8
     
   cat > helper.sh << EOF
 #!/bin/bash -ex
 
 mpids=''
 if [ \$SLURM_LOCALID -eq 0 ] ; then
-  rocm-monitor &
+  #rocm-monitor &
   mpids=\$!
 fi
 
-export NCCL_DEBUG=INFO 
-export RCCL_KERNEL_COLL_TRACE_ENABLE=1 
-export NCCL_DEBUG_SUBSYS=INIT,COLL
-# export AMD_LOG_LEVEL=4 
-export NCCL_PROTO=Simple
-export NCCL_NET_GDR_LEVEL=0
-export NCCL_MAX_NCHANNELS=2
-export NCCL_SPINS_BEFORE_CHECK_ABORT=1000
-
-export FI_LOG_LEVEL=info
+export NCCL_SOCKET_IFNAME=hsn0,hsn1,hsn2,hsn3
+# 
+# export NCCL_DEBUG=INFO 
+# export RCCL_KERNEL_COLL_TRACE_ENABLE=1 
+# export NCCL_DEBUG_SUBSYS=INIT,COLL
+# # export AMD_LOG_LEVEL=4 
+# export NCCL_PROTO=Simple
+# export NCCL_NET_GDR_LEVEL=0
+# export NCCL_MAX_NCHANNELS=2
+# export NCCL_SPINS_BEFORE_CHECK_ABORT=1000
+# export FI_LOG_LEVEL=info
 
 export MASTER_ADDR=\$(scontrol show hostname "\$SLURM_NODELIST" | head -n1)
-export MASTER_ADDR=nid005015
 echo \$MASTER_ADDR
 
 export MASTER_PORT=34567
@@ -722,12 +722,6 @@ export LOCAL_RANK=\$SLURM_LOCALID
 #--local_rank=\$SLURM_LOCALID
 unset ROCR_VISIBLE_DEVICES
 
-DISTRIBUTED_ARGS="--nproc_per_node $NPROC_PER_NODE \
-                  --nnodes \$SLURM_NNODES \
-                  --node_rank \$SLURM_NODEID \
-                  --master_addr \$MASTER_ADDR \
-                  --master_port \$MASTER_PORT"
-
 BERT_ARGS="--num-layers 12 \
            --hidden-size 768 \
            --num-attention-heads 12 \
@@ -736,8 +730,8 @@ BERT_ARGS="--num-layers 12 \
            --lr 7e-4 \
            --train-iters 100000 \
            --lr-warmup-iters 1000 \
-           --micro-batch-size 32 \
-           --global-batch-size $((32*2*1)) \
+           --micro-batch-size 64 \
+           --global-batch-size $((64*1*NPROC_PER_NODE*NNODES)) \
            --adam-beta2 0.999 \
            --adam-eps 1e-6 \
            --data-path $DATA_PATH \
@@ -750,13 +744,6 @@ OUTPUT_ARGS="--log-interval 100 \
              --save-interval 5000 \
              --eval-interval 1000 \
              --eval-iters 10"
-
-cmd="python3 -m torch.distributed.launch \$DISTRIBUTED_ARGS \
-       $wd/megatron/pretrain_bert.py \
-       \$BERT_ARGS \
-       \$OUTPUT_ARGS \
-       --save $CHECKPOINT_PATH \
-       --load $CHECKPOINT_PATH"
        
 cmd="python3 \
        $wd/megatron/pretrain_bert.py \
@@ -765,22 +752,36 @@ cmd="python3 \
        --save $CHECKPOINT_PATH \
        --load $CHECKPOINT_PATH"
 
+doprof=''
+if [ \$SLURM_PROCID -eq 0 ] ; then
+  rm -rf $wd/megatron.*
+  #doprof="rocprof --stats --basenames on -i $wd/counters.txt -o $wd/megatron.csv"
+  #doprof="rocprof --stats -i $wd/counters.txt -o $wd/megatron.csv"
+  #doprof="rocprof --hip-trace -o $wd/megatron.csv"
+  doprof="rocprof --stats -o $wd/megatron.csv"
+fi
+
 echo "--> Rank \$SLURM_PROCID (\$(taskset -p \$\$)) executing command: \$cmd"
 
-\$cmd |& tee run-\$SLURM_PROCID.log
+\$doprof \$cmd --exit-interval 100 |& tee run-\$SLURM_PROCID.log
+
+if [ ! "\$doprof" = '' ] ; then
+  cd $wd
+  rm -rf megatron.tar.xz
+  tar -cf - megatron.* | xz -T32 > megatron.tar.xz
+  cd -
+fi
 
 for p in \$mpids ; do
-  kill $p
+  kill \$p
 done
 
 EOF
   chmod +x helper.sh 
-  echo $LD_LIBRARY_PATH
+  #echo $LD_LIBRARY_PATH
   export LD_LIBRARY_PATH=/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/rccl-install/lib:/opt/cray/libfabric/1.15.0.0/lib64/:/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/deps/usr/lib64:/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/deps/usr/lib64/ncurses5:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/hip/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/hsa/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/llvm/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/lib:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/lib64:/pfs/lustrep2/projappl/project_462000125/samantao/rocm/rocm-5.2-65-sles/llvm:/opt/cray/pe/gcc/11.2.0/snos/lib64:/opt/cray/libfabric/1.15.0.0/lib64:/opt/cray/pe/papi/6.0.0.15/lib64:/users/samantao/coe/projappl/ongoing/megatron/megatron-kb-instructions/from-amd/rocm/deps/usr/lib64
-  MASKS=(ff000000000000 ff00000000000000 ff0000 ff000000 ff ff00 ff00000000 ff0000000000 )
   MASKS="ff000000000000,ff00000000000000,ff0000,ff000000,ff,ff00,ff00000000,ff0000000000"
-  NNODES=1
-  srun --jobid=$MYSLURMID -N $NNODES -n 1 \
+  srun --jobid=$MYSLURMID -N $NNODES -n $((NNODES*NPROC_PER_NODE)) \
   --gpus=$((8*$NNODES)) \
   --cpus-per-task=8 --cpu-bind=mask_cpu:$MASKS \
   ./helper.sh |& tee run-complete.log
